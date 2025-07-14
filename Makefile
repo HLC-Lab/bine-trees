@@ -30,7 +30,8 @@ TEST_EXEC = test.exe
 
 all: $(GENERAL_LIB) $(CARTESIAN_LIB) $(TEST_EXEC)
 
-test: $(TEST_EXEC)
+test:
+	./bin/test.sh
 
 # Compile general algorithm objects
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c

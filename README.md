@@ -9,6 +9,23 @@ This repository is structured as follows:
 - `include/`: contains the header files for the Bine Trees algorithms.
 - `Makefile`: a Makefile to build the libraries.
 - `lib/`: contains the compiled libraries for the Bine Trees algorithms.
+- `bin/`: contains the test scripts and executables to run the Bine Trees algorithms.
+- `test/`: contains the test code for the Bine Trees algorithms.
+
+# Building the Libraries
+To build the libraries, run the following command in the root directory of the repository:
+```bash
+make
+```
+This will compile the source code and create the libraries in the `lib/` directory and the tests executable in the `bin/` directory.
+
+# Running the Tests
+To run the tests, you can run:
+```bash
+make test
+```
+This script will run the tests for all the collectives implemented in the Bine Trees algorithms. It will print the results of the tests to the console.
+
 
 # Related Repositories
 This repository is intended to be as simple and self-contained as possible. Other repositories are related to Bine Trees and cover

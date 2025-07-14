@@ -8,10 +8,12 @@ LIBS = -lm
 # Directories
 SRC_DIR = src
 SRC_CARTESIAN_DIR = src_cartesian
+TEST_DIR = test
 
 # Source files
 GENERAL_SOURCES = $(wildcard $(SRC_DIR)/*.c)
 CARTESIAN_SOURCES = $(wildcard $(SRC_CARTESIAN_DIR)/*.c)
+TEST_SOURCES = $(wildcard $(TEST_DIR)/*.c)
 
 # Object files
 GENERAL_OBJECTS = $(GENERAL_SOURCES:.c=.o)
@@ -21,9 +23,14 @@ CARTESIAN_OBJECTS = $(CARTESIAN_SOURCES:.c=.o)
 GENERAL_LIB = libbine_general.a
 CARTESIAN_LIB = libbine_cartesian.a
 
-.PHONY: all clean
+# Test executable
+TEST_EXEC = test.exe
 
-all: $(GENERAL_LIB) $(CARTESIAN_LIB)
+.PHONY: all clean test
+
+all: $(GENERAL_LIB) $(CARTESIAN_LIB) $(TEST_EXEC)
+
+test: $(TEST_EXEC)
 
 # Compile general algorithm objects
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
@@ -40,5 +47,9 @@ $(GENERAL_LIB): $(GENERAL_OBJECTS)
 $(CARTESIAN_LIB): $(CARTESIAN_OBJECTS)
 	ar rcs lib/$@ $^
 
+# Build test executable
+$(TEST_EXEC): $(TEST_DIR)/test.c $(GENERAL_LIB)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) -I$(SRC_CARTESIAN_DIR) $< lib/$(GENERAL_LIB) $(LIBS) -o bin/$@
+
 clean:
-	rm -f $(SRC_DIR)/*.o $(SRC_CARTESIAN_DIR)/*.o lib/*.a
+	rm -f $(SRC_DIR)/*.o $(SRC_CARTESIAN_DIR)/*.o lib/*.a bin/$(TEST_EXEC)

@@ -1,8 +1,16 @@
-#include <stdint.h>
 /**
  * @file utils.h
  * @brief Utility functions.
  */
+#include <stdint.h>
+#include <assert.h>
+
+#define BINE_MAX_STEPS 20
+
+static int smallest_negabinary[BINE_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42,
+          -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
+static int largest_negabinary[BINE_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85,
+          341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
 
  /**
   * @brief Computes the mathematical modulo of a and b.
@@ -62,3 +70,85 @@ static int32_t negabinary_to_binary(uint32_t neg) {
     const uint32_t mask = 0xAAAAAAAA;
     return (mask ^ neg) - mask;
 }
+
+/**
+ * @brief Reverses the bits of a 32-bit unsigned integer.
+ * @param x The 32-bit unsigned integer to reverse.
+ * @returns The 32-bit unsigned integer with its bits reversed.
+ */
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+/**
+ * @brief Checks if a value is in the range of valid negabinary representations
+ * for a given number of bits.
+ * @param x The value to check.
+ * @param nbits The number of bits for the negabinary representation.
+ * @returns 1 if x is in the valid range, 0 otherwise.
+ */
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
+}
+
+/**
+ * @brief Gets the negabinary representation of a rank, by considering that if
+ * num_ranks it is not a power of two, the rank could have two different representations.
+ * In that case, the function will select the correct representation.
+ * @param num_ranks The total number of ranks.
+ * @param rank The rank to convert.
+ * @returns The negabinary representation of the rank.
+ */
+static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, uint32_t rank){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = log_2(num_ranks);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = binary_to_negabinary(rank);
+        }
+        if(in_range(rank - num_ranks, num_bits)){
+            nbb = binary_to_negabinary(rank - num_ranks);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = binary_to_negabinary(-rank);
+        }
+        if(in_range(-rank + num_ranks, num_bits)){
+            nbb = binary_to_negabinary(-rank + num_ranks);
+        }
+    }
+
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nbb;
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nba;
+    }else{ // Check MSB
+        if(nba & (80000000 >> (32 - num_bits))){
+            return nba;
+        }else{
+            return nbb;
+        }
+    }
+}
+
+/**
+ * @brief Computes nu(r, p) (see the paper).
+ * @param rank The rank to convert (denoted as 'r' in the paper).
+ * @param num_ranks The total number of ranks (denoted as 'p' in the paper).
+ * @returns The remapped rank.
+ */
+static inline uint32_t nu(uint32_t rank, uint32_t num_ranks){
+    uint32_t nu = get_rank_negabinary_representation(num_ranks, rank);    
+    nu = nu ^ (nu >> 1);
+    size_t num_bits = log_2(num_ranks);
+    nu = reverse(nu) >> (32 - num_bits);
+    return nu;
+}
+

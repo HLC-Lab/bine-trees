@@ -5,8 +5,8 @@
 VECTOR_SIZES=(16 100 1000 10000 100000)
 DATATYPES=("int" "double" "float" "char")
 RANK_COUNTS=(2 4 8 16)
-COLLECTIVES=("bcast")
-ALGORITHMS=("bine_bcast_small" "bine_bcast_large")
+COLLECTIVES=("bcast" "reduce")
+ALGORITHMS=("small" "large")
 
 # Colors for output
 RED='\033[0;31m'
@@ -169,9 +169,9 @@ main() {
                         
                         # Choose root rank (0 for most tests, vary occasionally)
                         local root=0
-                        if [ $((current_test % 5)) -eq 0 ] && [ $ranks -gt 1 ]; then
-                            root=$((ranks - 1))
-                        fi
+                        #if [ $((current_test % 5)) -eq 0 ] && [ $ranks -gt 1 ]; then
+                        #    root=$((ranks - 1))
+                        #fi
                         
                         # Run the test
                         if ! run_test $ranks $collective $algorithm $count $datatype $root; then

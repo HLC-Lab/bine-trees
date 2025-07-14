@@ -9,6 +9,8 @@
 // Forward declarations of custom algorithms
 int bine_bcast_small(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_Comm comm);
 int bine_bcast_large(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_Comm comm);
+int bine_reduce_small(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm);
+int bine_reduce_large(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm);
 
 // Test configuration structure
 typedef struct {
@@ -22,17 +24,25 @@ typedef struct {
 
 // Function pointer types for collective operations
 typedef int (*bcast_func_t)(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_Comm comm);
+typedef int (*reduce_func_t)(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dtype, MPI_Op op, int root, MPI_Comm comm);
 
 // Structure to hold function mappings
 typedef struct {
     char name[64];
-    bcast_func_t func;
+    void* func;  // Generic pointer to handle both bcast and reduce functions
 } algorithm_map_t;
 
 // Algorithm registry for broadcast
 static algorithm_map_t bcast_algorithms[] = {
-    {"bine_bcast_small", bine_bcast_small},
-    {"bine_bcast_large", bine_bcast_large},
+    {"small", (void*)bine_bcast_small},
+    {"large", (void*)bine_bcast_large},
+    {"", NULL}  // Sentinel
+};
+
+// Algorithm registry for reduce
+static algorithm_map_t reduce_algorithms[] = {
+    {"small", (void*)bine_reduce_small},
+    {"large", (void*)bine_reduce_large},
     {"", NULL}  // Sentinel
 };
 
@@ -68,12 +78,12 @@ void init_test_data(void* buf, int count, MPI_Datatype dtype, int rank) {
     } else if (dtype == MPI_DOUBLE) {
         double* data = (double*)buf;
         for (int i = 0; i < count; i++) {
-            data[i] = rank * 1000.0 + i * 0.1;
+            data[i] = rank * 1000.0 + i * 0.25;  
         }
     } else if (dtype == MPI_FLOAT) {
         float* data = (float*)buf;
         for (int i = 0; i < count; i++) {
-            data[i] = rank * 1000.0f + i * 0.1f;
+            data[i] = rank * 1000.0f + i * 0.25f;
         }
     } else if (dtype == MPI_CHAR) {
         char* data = (char*)buf;
@@ -151,10 +161,33 @@ void print_buffer(void* buf, int count, MPI_Datatype dtype, int rank, const char
 bcast_func_t find_bcast_algorithm(const char* name) {
     for (int i = 0; bcast_algorithms[i].func != NULL; i++) {
         if (strcmp(bcast_algorithms[i].name, name) == 0) {
-            return bcast_algorithms[i].func;
+            return (bcast_func_t)bcast_algorithms[i].func;
         }
     }
     return NULL;
+}
+
+/**
+ * @brief Find reduce algorithm function by name
+ */
+reduce_func_t find_reduce_algorithm(const char* name) {
+    for (int i = 0; reduce_algorithms[i].func != NULL; i++) {
+        if (strcmp(reduce_algorithms[i].name, name) == 0) {
+            return (reduce_func_t)reduce_algorithms[i].func;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * @brief Get MPI operation for reduce tests
+ */
+MPI_Op get_mpi_operation(MPI_Datatype dtype) {
+    // Use SUM for all numeric types, MIN for char
+    if (dtype == MPI_CHAR) {
+        return MPI_MIN;
+    }
+    return MPI_SUM;
 }
 
 /**
@@ -229,7 +262,7 @@ int test_bcast_correctness(test_config_t* config) {
         return 1;
     }
     
-    // Compare results
+    // Compare results with appropriate tolerance
     double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
     int match = compare_buffers(ref_buf, test_buf, config->count, dtype, tolerance);
     
@@ -258,22 +291,133 @@ int test_bcast_correctness(test_config_t* config) {
 }
 
 /**
+ * @brief Test reduce correctness
+ */
+int test_reduce_correctness(test_config_t* config) {
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    // Get datatype and size
+    int type_size;
+    MPI_Datatype dtype = get_mpi_datatype(config->datatype, &type_size);
+    if (dtype == MPI_DATATYPE_NULL) {
+        if (rank == 0) printf("Error: Unknown datatype '%s'\n", config->datatype);
+        return 1;
+    }
+    
+    // Get operation
+    MPI_Op op = get_mpi_operation(dtype);
+    
+    // Find algorithm
+    reduce_func_t custom_reduce = find_reduce_algorithm(config->algorithm);
+    if (custom_reduce == NULL) {
+        if (rank == 0) printf("Error: Unknown reduce algorithm '%s'\n", config->algorithm);
+        return 1;
+    }
+    
+    // Allocate buffers
+    void* sendbuf = malloc(config->count * type_size);
+    void* ref_recvbuf = malloc(config->count * type_size);
+    void* test_recvbuf = malloc(config->count * type_size);
+    if (!sendbuf || !ref_recvbuf || !test_recvbuf) {
+        if (rank == 0) printf("Error: Memory allocation failed\n");
+        return 1;
+    }
+    
+    // Initialize send data
+    init_test_data(sendbuf, config->count, dtype, rank);
+    
+    // Initialize receive buffers (only matters for root)
+    if (rank == config->root) {
+        memset(ref_recvbuf, 0, config->count * type_size);
+        memset(test_recvbuf, 0, config->count * type_size);
+    }
+    
+    if (config->verbose && rank == 0) {
+        printf("Testing %s with algorithm %s\n", config->collective, config->algorithm);
+        printf("Count: %d, Datatype: %s, Root: %d, Operation: %s\n", 
+               config->count, config->datatype, config->root,
+               (op == MPI_SUM) ? "SUM" : "MIN");
+    }
+    
+    // Test reference MPI implementation
+    double start_time = MPI_Wtime();
+    int ref_result = MPI_Reduce(sendbuf, ref_recvbuf, config->count, dtype, op, config->root, MPI_COMM_WORLD);
+    double ref_time = MPI_Wtime() - start_time;
+    
+    // Test custom implementation
+    start_time = MPI_Wtime();
+    int test_result = custom_reduce(sendbuf, test_recvbuf, config->count, dtype, op, config->root, MPI_COMM_WORLD);
+    double test_time = MPI_Wtime() - start_time;
+    
+    // Check for errors
+    if (ref_result != MPI_SUCCESS) {
+        if (rank == 0) printf("Error: MPI_Reduce failed with code %d\n", ref_result);
+        free(sendbuf);
+        free(ref_recvbuf);
+        free(test_recvbuf);
+        return 1;
+    }
+    
+    if (test_result != MPI_SUCCESS) {
+        if (rank == 0) printf("Error: Custom reduce algorithm failed with code %d\n", test_result);
+        free(sendbuf);
+        free(ref_recvbuf);
+        free(test_recvbuf);
+        return 1;
+    }
+    
+    // Compare results (only on root)
+    int match = 1;
+    if (rank == config->root) {
+        double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
+        match = compare_buffers(ref_recvbuf, test_recvbuf, config->count, dtype, tolerance);       
+        
+        if (config->verbose) {
+            print_buffer(ref_recvbuf, config->count, dtype, rank, "MPI_Reduce");
+            print_buffer(test_recvbuf, config->count, dtype, rank, config->algorithm);
+        }
+    }
+    
+    // Broadcast result from root to all ranks
+    MPI_Bcast(&match, 1, MPI_INT, config->root, MPI_COMM_WORLD);
+    
+    // Report results
+    if (rank == 0) {
+        printf("Test %s: %s\n", match ? "PASSED" : "FAILED", config->algorithm);
+        if (config->verbose) {
+            printf("  MPI_Reduce time: %.6f seconds\n", ref_time);
+            printf("  %s time: %.6f seconds\n", config->algorithm, test_time);
+            printf("  Speedup: %.2fx\n", ref_time / test_time);
+        }
+    }
+    
+    free(sendbuf);
+    free(ref_recvbuf);
+    free(test_recvbuf);
+    return match ? 0 : 1;
+}
+
+/**
  * @brief Print usage information
  */
 void print_usage(const char* program_name) {
     printf("Usage: %s [options]\n", program_name);
     printf("Options:\n");
-    printf("  -c, --collective <name>   Collective operation (bcast, reduce, etc.) [default: bcast]\n");
-    printf("  -a, --algorithm <name>    Algorithm name [default: bine_small]\n");
+    printf("  -c, --collective <name>   Collective operation (bcast, reduce) [default: bcast]\n");
+    printf("  -a, --algorithm <name>    Algorithm name (small, large) [default: small]\n");
     printf("  -n, --count <number>      Number of elements [default: 1000]\n");
     printf("  -t, --type <datatype>     Data type (int, double, float, char) [default: int]\n");
     printf("  -r, --root <rank>         Root rank [default: 0]\n");
     printf("  -v, --verbose             Verbose output\n");
     printf("  -h, --help                Show this help message\n");
     printf("\nAvailable algorithms:\n");
-    printf("  Broadcast: bine_small\n");
-    printf("\nExample:\n");
-    printf("  mpirun -np 4 %s -c bcast -a bine_small -n 100 -t double -r 0 -v\n", program_name);
+    printf("  Broadcast: small, large\n");
+    printf("  Reduce: small, large\n");
+    printf("\nExamples:\n");
+    printf("  mpirun -np 4 %s -c bcast -a small -n 100 -t double -r 0 -v\n", program_name);
+    printf("  mpirun -np 4 %s -c reduce -a large -n 1000 -t int -r 0 -v\n", program_name);
 }
 
 /**
@@ -282,7 +426,7 @@ void print_usage(const char* program_name) {
 int parse_args(int argc, char* argv[], test_config_t* config) {
     // Set defaults
     strcpy(config->collective, "bcast");
-    strcpy(config->algorithm, "bine_small");
+    strcpy(config->algorithm, "small");
     config->count = 1000;
     strcpy(config->datatype, "int");
     config->root = 0;
@@ -343,6 +487,8 @@ int main(int argc, char* argv[]) {
     // Run the appropriate test
     if (strcmp(config.collective, "bcast") == 0) {
         result = test_bcast_correctness(&config);
+    } else if (strcmp(config.collective, "reduce") == 0) {
+        result = test_reduce_correctness(&config);
     } else {
         if (rank == 0) printf("Error: Unsupported collective '%s'\n", config.collective);
         result = 1;

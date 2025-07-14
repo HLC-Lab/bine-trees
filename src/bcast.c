@@ -75,6 +75,7 @@ int bine_bcast_large(void *buffer, size_t count, MPI_Datatype dt, int root, MPI_
   assert(root == 0); // TODO: Generalize
   int size, rank, dtsize, err = MPI_SUCCESS;
   MPI_Comm_size(comm, &size);
+  assert(is_power_of_two(size)); // TODO: Generalize
   MPI_Comm_rank(comm, &rank);
   MPI_Type_size(dt, &dtsize);
 

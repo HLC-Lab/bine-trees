@@ -79,7 +79,8 @@ int bine_reduce_large(const void *sendbuf, void *recvbuf, size_t count,
   assert(root == 0); // TODO: Generalize
   int size, rank, dtsize, err = MPI_SUCCESS, steps, step;
   int count_per_rank, rem, mask = 0x1, inverse_mask;
-  int block_first_mask, remapped_rank, receiving_mask;
+  int block_first_mask, receiving_mask;
+  uint32_t remapped_rank;
   int *rindex = NULL, *sindex = NULL, *rcount = NULL, *scount = NULL;
   char* resbuf = NULL, *tmpbuf = NULL;
   size_t buf_size;
@@ -87,9 +88,10 @@ int bine_reduce_large(const void *sendbuf, void *recvbuf, size_t count,
   MPI_Comm_rank(comm, &rank);
   MPI_Type_size(dt, &dtsize);
 
-  steps = log_2(size);
-  // TODO: Generalize
+  // Check if size is power of two and get steps
   if(!is_power_of_two(size)) { err = MPI_ERR_SIZE; goto err_hndl; }
+  steps = log_2(size);
+  if(steps < 0) { err = MPI_ERR_SIZE; goto err_hndl; }
 
   count_per_rank = count / size;
   rem = count % size;
@@ -113,10 +115,14 @@ int bine_reduce_large(const void *sendbuf, void *recvbuf, size_t count,
   remapped_rank = nu(rank, size);
 
   /***** Reduce_scatter *****/
-  rindex = malloc(sizeof(*rindex) * steps);
-  sindex = malloc(sizeof(*sindex) * steps);
-  rcount = malloc(sizeof(*rcount) * steps);
-  scount = malloc(sizeof(*scount) * steps);
+  rindex = malloc(sizeof(int) * steps);
+  sindex = malloc(sizeof(int) * steps);
+  rcount = malloc(sizeof(int) * steps);
+  scount = malloc(sizeof(int) * steps);
+  if (!rindex || !sindex || !rcount || !scount) { 
+    err = MPI_ERR_NO_MEM; 
+    goto err_hndl; 
+  }
   step = 0;
   while(mask < size){
     int partner;

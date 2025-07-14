@@ -95,7 +95,7 @@ int bine_bcast_large(void *buffer, size_t count, MPI_Datatype dt, int root, MPI_
   int mask = 0x1;
   int inverse_mask = 0x1 << (int) (log_2(size) - 1);
   int block_first_mask = ~(inverse_mask - 1);
-  int remapped_rank = nu(rank, size);
+  uint32_t remapped_rank = nu(rank, size);
   int receiving_mask = inverse_mask << 1; // Root never receives. By having a large mask inverse_mask will always be < receiving_mask
   // I receive in the step corresponding to the position (starting from right)
   // of the first 1 in my remapped rank -- this indicates the step when the data reaches me

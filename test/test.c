@@ -11,6 +11,10 @@ int bine_bcast_small(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_
 int bine_bcast_large(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_Comm comm);
 int bine_reduce_small(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm);
 int bine_reduce_large(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm);
+int bine_gather_any(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm);
+int bine_scatter_any(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm);
+int bine_alltoall_small(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+int bine_allgather_block_by_block(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, MPI_Comm comm);
 
 // Test configuration structure
 typedef struct {
@@ -25,26 +29,87 @@ typedef struct {
 // Function pointer types for collective operations
 typedef int (*bcast_func_t)(void *buf, size_t count, MPI_Datatype dtype, int root, MPI_Comm comm);
 typedef int (*reduce_func_t)(const void *sendbuf, void *recvbuf, size_t count, MPI_Datatype dtype, MPI_Op op, int root, MPI_Comm comm);
+typedef int (*gather_func_t)(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm);
+typedef int (*scatter_func_t)(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm);
+typedef int (*alltoall_func_t)(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+typedef int (*allgather_func_t)(const void *sendbuf, size_t sendcount, MPI_Datatype sendtype, void *recvbuf, size_t recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+
+// Generic function pointer for algorithm lookup
 
 // Structure to hold function mappings
 typedef struct {
     char name[64];
-    void* func;  // Generic pointer to handle both bcast and reduce functions
+    void* func;
 } algorithm_map_t;
 
-// Algorithm registry for broadcast
+// Algorithm registries
 static algorithm_map_t bcast_algorithms[] = {
-    {"small", (void*)bine_bcast_small},
-    {"large", (void*)bine_bcast_large},
-    {"", NULL}  // Sentinel
+    {"small", (bcast_func_t)bine_bcast_small},
+    {"large", (bcast_func_t)bine_bcast_large},
+    {"", NULL}
 };
 
-// Algorithm registry for reduce
 static algorithm_map_t reduce_algorithms[] = {
-    {"small", (void*)bine_reduce_small},
-    {"large", (void*)bine_reduce_large},
-    {"", NULL}  // Sentinel
+    {"small", (reduce_func_t)bine_reduce_small},
+    {"large", (reduce_func_t)bine_reduce_large},
+    {"", NULL}
 };
+
+static algorithm_map_t gather_algorithms[] = {
+    {"any", (gather_func_t)bine_gather_any},
+    {"", NULL}
+};
+
+static algorithm_map_t scatter_algorithms[] = {
+    {"any", (scatter_func_t)bine_scatter_any},
+    {"", NULL}
+};
+
+static algorithm_map_t alltoall_algorithms[] = {
+    {"small", (alltoall_func_t)bine_alltoall_small},
+    {"", NULL}
+};
+
+static algorithm_map_t allgather_algorithms[] = {
+    {"block_by_block", (allgather_func_t)bine_allgather_block_by_block},
+    {"", NULL}
+};
+
+// Collective operation types
+typedef enum {
+    COLLECTIVE_BCAST,
+    COLLECTIVE_REDUCE,
+    COLLECTIVE_GATHER,
+    COLLECTIVE_SCATTER,
+    COLLECTIVE_ALLTOALL,
+    COLLECTIVE_ALLGATHER,
+    COLLECTIVE_UNKNOWN
+} collective_type_t;
+
+/**
+ * @brief Get collective type from string
+ */
+collective_type_t get_collective_type(const char* name) {
+    if (strcmp(name, "bcast") == 0) return COLLECTIVE_BCAST;
+    if (strcmp(name, "reduce") == 0) return COLLECTIVE_REDUCE;
+    if (strcmp(name, "gather") == 0) return COLLECTIVE_GATHER;
+    if (strcmp(name, "scatter") == 0) return COLLECTIVE_SCATTER;
+    if (strcmp(name, "alltoall") == 0) return COLLECTIVE_ALLTOALL;
+    if (strcmp(name, "allgather") == 0) return COLLECTIVE_ALLGATHER;
+    return COLLECTIVE_UNKNOWN;
+}
+
+/**
+ * @brief Generic algorithm finder
+ */
+void* find_algorithm(const char* name, algorithm_map_t* algorithms) {
+    for (int i = 0; algorithms[i].func != NULL; i++) {
+        if (strcmp(algorithms[i].name, name) == 0) {
+            return algorithms[i].func;
+        }
+    }
+    return NULL;
+}
 
 /**
  * @brief Get MPI datatype from string name
@@ -156,59 +221,71 @@ void print_buffer(void* buf, int count, MPI_Datatype dtype, int rank, const char
 }
 
 /**
- * @brief Find algorithm function by name
- */
-bcast_func_t find_bcast_algorithm(const char* name) {
-    for (int i = 0; bcast_algorithms[i].func != NULL; i++) {
-        if (strcmp(bcast_algorithms[i].name, name) == 0) {
-            return (bcast_func_t)bcast_algorithms[i].func;
-        }
-    }
-    return NULL;
-}
-
-/**
- * @brief Find reduce algorithm function by name
- */
-reduce_func_t find_reduce_algorithm(const char* name) {
-    for (int i = 0; reduce_algorithms[i].func != NULL; i++) {
-        if (strcmp(reduce_algorithms[i].name, name) == 0) {
-            return (reduce_func_t)reduce_algorithms[i].func;
-        }
-    }
-    return NULL;
-}
-
-/**
  * @brief Get MPI operation for reduce tests
  */
 MPI_Op get_mpi_operation(MPI_Datatype dtype) {
-    // Use SUM for all numeric types, MIN for char
-    if (dtype == MPI_CHAR) {
-        return MPI_MIN;
+    return (dtype == MPI_CHAR) ? MPI_MIN : MPI_SUM;
+}
+
+/**
+ * @brief Common test setup and validation
+ */
+int test_setup(test_config_t* config, int* rank, int* size, int* type_size, MPI_Datatype* dtype) {
+    MPI_Comm_rank(MPI_COMM_WORLD, rank);
+    MPI_Comm_size(MPI_COMM_WORLD, size);
+    
+    *dtype = get_mpi_datatype(config->datatype, type_size);
+    if (*dtype == MPI_DATATYPE_NULL) {
+        if (*rank == 0) printf("Error: Unknown datatype '%s'\n", config->datatype);
+        return 1;
     }
-    return MPI_SUM;
+    
+    if (config->verbose && *rank == 0) {
+        printf("Testing %s with algorithm %s\n", config->collective, config->algorithm);
+        printf("Count: %d, Datatype: %s, Root: %d\n", 
+               config->count, config->datatype, config->root);
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief Common error checking for MPI operations
+ */
+int check_mpi_result(int result, const char* operation, int rank) {
+    if (result != MPI_SUCCESS) {
+        if (rank == 0) printf("Error: %s failed with code %d\n", operation, result);
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief Common result reporting
+ */
+void report_results(int match, const char* algorithm, double ref_time, double test_time, int verbose, int rank) {
+    if (rank == 0) {
+        printf("Test %s: %s\n", match ? "PASSED" : "FAILED", algorithm);
+        if (verbose) {
+            printf("  Reference time: %.6f seconds\n", ref_time);
+            printf("  %s time: %.6f seconds\n", algorithm, test_time);
+            printf("  Speedup: %.2fx\n", ref_time / test_time);
+        }
+    }
 }
 
 /**
  * @brief Test broadcast correctness
  */
 int test_bcast_correctness(test_config_t* config) {
-    int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    int rank, size, type_size;
+    MPI_Datatype dtype;
     
-    // Get datatype and size
-    int type_size;
-    MPI_Datatype dtype = get_mpi_datatype(config->datatype, &type_size);
-    if (dtype == MPI_DATATYPE_NULL) {
-        if (rank == 0) printf("Error: Unknown datatype '%s'\n", config->datatype);
-        return 1;
-    }
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
     
     // Find algorithm
-    bcast_func_t custom_bcast = find_bcast_algorithm(config->algorithm);
-    if (custom_bcast == NULL) {
+    bcast_func_t custom_bcast = (bcast_func_t)find_algorithm(config->algorithm, bcast_algorithms);
+    if (!custom_bcast) {
         if (rank == 0) printf("Error: Unknown algorithm '%s'\n", config->algorithm);
         return 1;
     }
@@ -218,26 +295,20 @@ int test_bcast_correctness(test_config_t* config) {
     void* test_buf = malloc(config->count * type_size);
     if (!ref_buf || !test_buf) {
         if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(ref_buf); free(test_buf);
         return 1;
     }
     
-    // Initialize data on root
+    // Initialize data
     if (rank == config->root) {
         init_test_data(ref_buf, config->count, dtype, config->root);
         memcpy(test_buf, ref_buf, config->count * type_size);
     } else {
-        // Initialize with different data on non-root ranks
         init_test_data(ref_buf, config->count, dtype, rank);
         init_test_data(test_buf, config->count, dtype, rank);
     }
     
-    if (config->verbose && rank == 0) {
-        printf("Testing %s with algorithm %s\n", config->collective, config->algorithm);
-        printf("Count: %d, Datatype: %s, Root: %d\n", 
-               config->count, config->datatype, config->root);
-    }
-    
-    // Test reference MPI implementation
+    // Test reference implementation
     double start_time = MPI_Wtime();
     int ref_result = MPI_Bcast(ref_buf, config->count, dtype, config->root, MPI_COMM_WORLD);
     double ref_time = MPI_Wtime() - start_time;
@@ -248,25 +319,16 @@ int test_bcast_correctness(test_config_t* config) {
     double test_time = MPI_Wtime() - start_time;
     
     // Check for errors
-    if (ref_result != MPI_SUCCESS) {
-        if (rank == 0) printf("Error: MPI_Bcast failed with code %d\n", ref_result);
-        free(ref_buf);
-        free(test_buf);
+    if (check_mpi_result(ref_result, "MPI_Bcast", rank) || 
+        check_mpi_result(test_result, "Custom bcast", rank)) {
+        free(ref_buf); free(test_buf);
         return 1;
     }
     
-    if (test_result != MPI_SUCCESS) {
-        if (rank == 0) printf("Error: Custom algorithm failed with code %d\n", test_result);
-        free(ref_buf);
-        free(test_buf);
-        return 1;
-    }
-    
-    // Compare results with appropriate tolerance
+    // Compare and report results
     double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
     int match = compare_buffers(ref_buf, test_buf, config->count, dtype, tolerance);
     
-    // Gather results from all ranks
     int global_match;
     MPI_Allreduce(&match, &global_match, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
     
@@ -275,18 +337,9 @@ int test_bcast_correctness(test_config_t* config) {
         print_buffer(test_buf, config->count, dtype, rank, config->algorithm);
     }
     
-    // Report results
-    if (rank == 0) {
-        printf("Test %s: %s\n", global_match ? "PASSED" : "FAILED", config->algorithm);
-        if (config->verbose) {
-            printf("  MPI_Bcast time: %.6f seconds\n", ref_time);
-            printf("  %s time: %.6f seconds\n", config->algorithm, test_time);
-            printf("  Speedup: %.2fx\n", ref_time / test_time);
-        }
-    }
+    report_results(global_match, config->algorithm, ref_time, test_time, config->verbose, rank);
     
-    free(ref_buf);
-    free(test_buf);
+    free(ref_buf); free(test_buf);
     return global_match ? 0 : 1;
 }
 
@@ -294,24 +347,15 @@ int test_bcast_correctness(test_config_t* config) {
  * @brief Test reduce correctness
  */
 int test_reduce_correctness(test_config_t* config) {
-    int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    int rank, size, type_size;
+    MPI_Datatype dtype;
     
-    // Get datatype and size
-    int type_size;
-    MPI_Datatype dtype = get_mpi_datatype(config->datatype, &type_size);
-    if (dtype == MPI_DATATYPE_NULL) {
-        if (rank == 0) printf("Error: Unknown datatype '%s'\n", config->datatype);
-        return 1;
-    }
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
     
-    // Get operation
+    // Get operation and find algorithm
     MPI_Op op = get_mpi_operation(dtype);
-    
-    // Find algorithm
-    reduce_func_t custom_reduce = find_reduce_algorithm(config->algorithm);
-    if (custom_reduce == NULL) {
+    reduce_func_t custom_reduce = (reduce_func_t)find_algorithm(config->algorithm, reduce_algorithms);
+    if (!custom_reduce) {
         if (rank == 0) printf("Error: Unknown reduce algorithm '%s'\n", config->algorithm);
         return 1;
     }
@@ -322,57 +366,42 @@ int test_reduce_correctness(test_config_t* config) {
     void* test_recvbuf = malloc(config->count * type_size);
     if (!sendbuf || !ref_recvbuf || !test_recvbuf) {
         if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
         return 1;
     }
     
-    // Initialize send data
+    // Initialize data
     init_test_data(sendbuf, config->count, dtype, rank);
-    
-    // Initialize receive buffers (only matters for root)
     if (rank == config->root) {
         memset(ref_recvbuf, 0, config->count * type_size);
         memset(test_recvbuf, 0, config->count * type_size);
     }
     
     if (config->verbose && rank == 0) {
-        printf("Testing %s with algorithm %s\n", config->collective, config->algorithm);
-        printf("Count: %d, Datatype: %s, Root: %d, Operation: %s\n", 
-               config->count, config->datatype, config->root,
-               (op == MPI_SUM) ? "SUM" : "MIN");
+        printf("Operation: %s\n", (op == MPI_SUM) ? "SUM" : "MIN");
     }
     
-    // Test reference MPI implementation
+    // Test implementations
     double start_time = MPI_Wtime();
     int ref_result = MPI_Reduce(sendbuf, ref_recvbuf, config->count, dtype, op, config->root, MPI_COMM_WORLD);
     double ref_time = MPI_Wtime() - start_time;
     
-    // Test custom implementation
     start_time = MPI_Wtime();
     int test_result = custom_reduce(sendbuf, test_recvbuf, config->count, dtype, op, config->root, MPI_COMM_WORLD);
     double test_time = MPI_Wtime() - start_time;
     
     // Check for errors
-    if (ref_result != MPI_SUCCESS) {
-        if (rank == 0) printf("Error: MPI_Reduce failed with code %d\n", ref_result);
-        free(sendbuf);
-        free(ref_recvbuf);
-        free(test_recvbuf);
+    if (check_mpi_result(ref_result, "MPI_Reduce", rank) || 
+        check_mpi_result(test_result, "Custom reduce", rank)) {
+        free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
         return 1;
     }
     
-    if (test_result != MPI_SUCCESS) {
-        if (rank == 0) printf("Error: Custom reduce algorithm failed with code %d\n", test_result);
-        free(sendbuf);
-        free(ref_recvbuf);
-        free(test_recvbuf);
-        return 1;
-    }
-    
-    // Compare results (only on root)
+    // Compare and report results
     int match = 1;
     if (rank == config->root) {
         double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
-        match = compare_buffers(ref_recvbuf, test_recvbuf, config->count, dtype, tolerance);       
+        match = compare_buffers(ref_recvbuf, test_recvbuf, config->count, dtype, tolerance);
         
         if (config->verbose) {
             print_buffer(ref_recvbuf, config->count, dtype, rank, "MPI_Reduce");
@@ -380,23 +409,342 @@ int test_reduce_correctness(test_config_t* config) {
         }
     }
     
-    // Broadcast result from root to all ranks
     MPI_Bcast(&match, 1, MPI_INT, config->root, MPI_COMM_WORLD);
+    report_results(match, config->algorithm, ref_time, test_time, config->verbose, rank);
     
-    // Report results
-    if (rank == 0) {
-        printf("Test %s: %s\n", match ? "PASSED" : "FAILED", config->algorithm);
+    free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
+    return match ? 0 : 1;
+}
+
+/**
+ * @brief Test gather correctness
+ */
+int test_gather_correctness(test_config_t* config) {
+    int rank, size, type_size;
+    MPI_Datatype dtype;
+    
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
+    
+    // Find algorithm
+    gather_func_t custom_gather = (gather_func_t)find_algorithm(config->algorithm, gather_algorithms);
+    if (!custom_gather) {
+        if (rank == 0) printf("Error: Unknown gather algorithm '%s'\n", config->algorithm);
+        return 1;
+    }
+    
+    // Allocate buffers
+    void* sendbuf = malloc(config->count * type_size);
+    void* ref_recvbuf = (rank == config->root) ? malloc(config->count * size * type_size) : NULL;
+    void* test_recvbuf = (rank == config->root) ? malloc(config->count * size * type_size) : NULL;
+    
+    if (!sendbuf || (rank == config->root && (!ref_recvbuf || !test_recvbuf))) {
+        if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Initialize data
+    init_test_data(sendbuf, config->count, dtype, rank);
+    
+    if (config->verbose && rank == 0) {
+        printf("Size: %d\n", size);
+    }
+    
+    // Test implementations
+    double start_time = MPI_Wtime();
+    int ref_result = MPI_Gather(sendbuf, config->count, dtype, ref_recvbuf, config->count, dtype, config->root, MPI_COMM_WORLD);
+    double ref_time = MPI_Wtime() - start_time;
+    
+    start_time = MPI_Wtime();
+    int test_result = custom_gather(sendbuf, config->count, dtype, test_recvbuf, config->count, dtype, config->root, MPI_COMM_WORLD);
+    double test_time = MPI_Wtime() - start_time;
+    
+    // Check for errors
+    if (check_mpi_result(ref_result, "MPI_Gather", rank) || 
+        check_mpi_result(test_result, "Custom gather", rank)) {
+        free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Compare and report results
+    int match = 1;
+    if (rank == config->root) {
+        match = compare_buffers(ref_recvbuf, test_recvbuf, config->count * size, dtype, 0.0);
+        
         if (config->verbose) {
-            printf("  MPI_Reduce time: %.6f seconds\n", ref_time);
-            printf("  %s time: %.6f seconds\n", config->algorithm, test_time);
-            printf("  Speedup: %.2fx\n", ref_time / test_time);
+            int display_count = (config->count * size > 10) ? 10 : config->count * size;
+            printf("Gathered data comparison (showing first %d elements):\n", display_count);
+            print_buffer(ref_recvbuf, display_count, dtype, rank, "MPI_Gather");
+            print_buffer(test_recvbuf, display_count, dtype, rank, config->algorithm);
         }
     }
     
-    free(sendbuf);
-    free(ref_recvbuf);
-    free(test_recvbuf);
+    MPI_Bcast(&match, 1, MPI_INT, config->root, MPI_COMM_WORLD);
+    report_results(match, config->algorithm, ref_time, test_time, config->verbose, rank);
+    
+    free(sendbuf); free(ref_recvbuf); free(test_recvbuf);
     return match ? 0 : 1;
+}
+
+/**
+ * @brief Test scatter correctness
+ */
+int test_scatter_correctness(test_config_t* config) {
+    int rank, size, type_size;
+    MPI_Datatype dtype;
+    
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
+    
+    // Find algorithm
+    scatter_func_t custom_scatter = (scatter_func_t)find_algorithm(config->algorithm, scatter_algorithms);
+    if (!custom_scatter) {
+        if (rank == 0) printf("Error: Unknown scatter algorithm '%s'\n", config->algorithm);
+        return 1;
+    }
+    
+    // Allocate buffers
+    void* ref_sendbuf = (rank == config->root) ? malloc(config->count * size * type_size) : NULL;
+    void* test_sendbuf = (rank == config->root) ? malloc(config->count * size * type_size) : NULL;
+    void* ref_recvbuf = malloc(config->count * type_size);
+    void* test_recvbuf = malloc(config->count * type_size);
+    
+    if (!ref_recvbuf || !test_recvbuf || 
+        (rank == config->root && (!ref_sendbuf || !test_sendbuf))) {
+        if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Initialize send data (only on root)
+    if (rank == config->root) {
+        // Fill send buffer with data from each "rank"
+        for (int r = 0; r < size; r++) {
+            void* rank_data = (char*)ref_sendbuf + r * config->count * type_size;
+            init_test_data(rank_data, config->count, dtype, r);
+        }
+        memcpy(test_sendbuf, ref_sendbuf, config->count * size * type_size);
+    }
+    
+    // Initialize receive buffers with different data
+    init_test_data(ref_recvbuf, config->count, dtype, rank + 100);
+    init_test_data(test_recvbuf, config->count, dtype, rank + 100);
+    
+    if (config->verbose && rank == 0) {
+        printf("Size: %d\n", size);
+    }
+    
+    // Test implementations
+    double start_time = MPI_Wtime();
+    int ref_result = MPI_Scatter(ref_sendbuf, config->count, dtype, 
+                                ref_recvbuf, config->count, dtype, 
+                                config->root, MPI_COMM_WORLD);
+    double ref_time = MPI_Wtime() - start_time;
+    
+    start_time = MPI_Wtime();
+    int test_result = custom_scatter(test_sendbuf, config->count, dtype, 
+                                    test_recvbuf, config->count, dtype, 
+                                    config->root, MPI_COMM_WORLD);
+    double test_time = MPI_Wtime() - start_time;
+    
+    // Check for errors
+    if (check_mpi_result(ref_result, "MPI_Scatter", rank) || 
+        check_mpi_result(test_result, "Custom scatter", rank)) {
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Compare results (each rank compares its own received data)
+    double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
+    int match = compare_buffers(ref_recvbuf, test_recvbuf, config->count, dtype, tolerance);
+    
+    // Gather results from all ranks
+    int global_match;
+    MPI_Allreduce(&match, &global_match, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    
+    if (config->verbose) {
+        printf("Rank %d scattered data comparison:\n", rank);
+        print_buffer(ref_recvbuf, config->count, dtype, rank, "MPI_Scatter");
+        print_buffer(test_recvbuf, config->count, dtype, rank, config->algorithm);
+    }
+    
+    report_results(global_match, config->algorithm, ref_time, test_time, config->verbose, rank);
+    
+    free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+    return global_match ? 0 : 1;
+}
+
+/**
+ * @brief Test alltoall correctness
+ */
+int test_alltoall_correctness(test_config_t* config) {
+    int rank, size, type_size;
+    MPI_Datatype dtype;
+    
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
+    
+    // Find algorithm
+    alltoall_func_t custom_alltoall = (alltoall_func_t)find_algorithm(config->algorithm, alltoall_algorithms);
+    if (!custom_alltoall) {
+        if (rank == 0) printf("Error: Unknown alltoall algorithm '%s'\n", config->algorithm);
+        return 1;
+    }
+    
+    // Allocate buffers
+    void* ref_sendbuf = malloc(config->count * size * type_size);
+    void* test_sendbuf = malloc(config->count * size * type_size);
+    void* ref_recvbuf = malloc(config->count * size * type_size);
+    void* test_recvbuf = malloc(config->count * size * type_size);
+    
+    if (!ref_sendbuf || !test_sendbuf || !ref_recvbuf || !test_recvbuf) {
+        if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Initialize send data - each rank creates data for all other ranks
+    for (int dest = 0; dest < size; dest++) {
+        void* dest_data = (char*)ref_sendbuf + dest * config->count * type_size;
+        // Create unique data: rank sends (rank*1000 + dest*100 + i) to dest
+        if (dtype == MPI_INT) {
+            int* data = (int*)dest_data;
+            for (int i = 0; i < config->count; i++) {
+                data[i] = rank * 1000 + dest * 100 + i;
+            }
+        } else if (dtype == MPI_DOUBLE) {
+            double* data = (double*)dest_data;
+            for (int i = 0; i < config->count; i++) {
+                data[i] = rank * 1000.0 + dest * 100.0 + i * 0.25;
+            }
+        } else if (dtype == MPI_FLOAT) {
+            float* data = (float*)dest_data;
+            for (int i = 0; i < config->count; i++) {
+                data[i] = rank * 1000.0f + dest * 100.0f + i * 0.25f;
+            }
+        } else if (dtype == MPI_CHAR) {
+            char* data = (char*)dest_data;
+            for (int i = 0; i < config->count; i++) {
+                data[i] = (char)((rank + dest + i) % 128);
+            }
+        }
+    }
+    memcpy(test_sendbuf, ref_sendbuf, config->count * size * type_size);
+    
+    if (config->verbose && rank == 0) {
+        printf("Size: %d\n", size);
+    }
+    
+    // Test implementations
+    double start_time = MPI_Wtime();
+    int ref_result = MPI_Alltoall(ref_sendbuf, config->count, dtype, 
+                                 ref_recvbuf, config->count, dtype, MPI_COMM_WORLD);
+    double ref_time = MPI_Wtime() - start_time;
+    
+    start_time = MPI_Wtime();
+    int test_result = custom_alltoall(test_sendbuf, config->count, dtype, 
+                                     test_recvbuf, config->count, dtype, MPI_COMM_WORLD);
+    double test_time = MPI_Wtime() - start_time;
+    
+    // Check for errors
+    if (check_mpi_result(ref_result, "MPI_Alltoall", rank) || 
+        check_mpi_result(test_result, "Custom alltoall", rank)) {
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Compare results (each rank compares its received data)
+    double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
+    int match = compare_buffers(ref_recvbuf, test_recvbuf, config->count * size, dtype, tolerance);
+    
+    // Gather results from all ranks
+    int global_match;
+    MPI_Allreduce(&match, &global_match, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    
+    if (config->verbose) {
+        int display_count = (config->count * size > 10) ? 10 : config->count * size;
+        printf("Rank %d alltoall data comparison (showing first %d elements):\n", rank, display_count);
+        print_buffer(ref_recvbuf, display_count, dtype, rank, "MPI_Alltoall");
+        print_buffer(test_recvbuf, display_count, dtype, rank, config->algorithm);
+    }
+    
+    report_results(global_match, config->algorithm, ref_time, test_time, config->verbose, rank);
+    
+    free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+    return global_match ? 0 : 1;
+}
+
+/**
+ * @brief Test allgather correctness
+ */
+int test_allgather_correctness(test_config_t* config) {
+    int rank, size, type_size;
+    MPI_Datatype dtype;
+    
+    if (test_setup(config, &rank, &size, &type_size, &dtype)) return 1;
+    
+    // Find algorithm
+    allgather_func_t custom_allgather = (allgather_func_t)find_algorithm(config->algorithm, allgather_algorithms);
+    if (!custom_allgather) {
+        if (rank == 0) printf("Error: Unknown allgather algorithm '%s'\n", config->algorithm);
+        return 1;
+    }
+    
+    // Allocate buffers
+    void* ref_sendbuf = malloc(config->count * type_size);
+    void* test_sendbuf = malloc(config->count * type_size);
+    void* ref_recvbuf = malloc(config->count * size * type_size);
+    void* test_recvbuf = malloc(config->count * size * type_size);
+    
+    if (!ref_sendbuf || !test_sendbuf || !ref_recvbuf || !test_recvbuf) {
+        if (rank == 0) printf("Error: Memory allocation failed\n");
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Initialize send data - each rank sends its own data
+    init_test_data(ref_sendbuf, config->count, dtype, rank);
+    memcpy(test_sendbuf, ref_sendbuf, config->count * type_size);
+    
+    if (config->verbose && rank == 0) {
+        printf("Size: %d\n", size);
+    }
+    
+    // Test implementations
+    double start_time = MPI_Wtime();
+    int ref_result = MPI_Allgather(ref_sendbuf, config->count, dtype, 
+                                  ref_recvbuf, config->count, dtype, MPI_COMM_WORLD);
+    double ref_time = MPI_Wtime() - start_time;
+    
+    start_time = MPI_Wtime();
+    int test_result = custom_allgather(test_sendbuf, config->count, dtype, 
+                                      test_recvbuf, config->count, dtype, MPI_COMM_WORLD);
+    double test_time = MPI_Wtime() - start_time;
+    
+    // Check for errors
+    if (check_mpi_result(ref_result, "MPI_Allgather", rank) || 
+        check_mpi_result(test_result, "Custom allgather", rank)) {
+        free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+        return 1;
+    }
+    
+    // Compare results (each rank compares its received data)
+    double tolerance = (dtype == MPI_DOUBLE) ? 1e-12 : (dtype == MPI_FLOAT) ? 1e-6 : 0.0;
+    int match = compare_buffers(ref_recvbuf, test_recvbuf, config->count * size, dtype, tolerance);
+    
+    // Gather results from all ranks
+    int global_match;
+    MPI_Allreduce(&match, &global_match, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    
+    if (config->verbose) {
+        int display_count = (config->count * size > 10) ? 10 : config->count * size;
+        printf("Rank %d allgather data comparison (showing first %d elements):\n", rank, display_count);
+        print_buffer(ref_recvbuf, display_count, dtype, rank, "MPI_Allgather");
+        print_buffer(test_recvbuf, display_count, dtype, rank, config->algorithm);
+    }
+    
+    report_results(global_match, config->algorithm, ref_time, test_time, config->verbose, rank);
+    
+    free(ref_sendbuf); free(test_sendbuf); free(ref_recvbuf); free(test_recvbuf);
+    return global_match ? 0 : 1;
 }
 
 /**
@@ -405,8 +753,8 @@ int test_reduce_correctness(test_config_t* config) {
 void print_usage(const char* program_name) {
     printf("Usage: %s [options]\n", program_name);
     printf("Options:\n");
-    printf("  -c, --collective <name>   Collective operation (bcast, reduce) [default: bcast]\n");
-    printf("  -a, --algorithm <name>    Algorithm name (small, large) [default: small]\n");
+    printf("  -c, --collective <name>   Collective operation (bcast, reduce, gather, scatter, alltoall, allgather) [default: bcast]\n");
+    printf("  -a, --algorithm <name>    Algorithm name [default: small]\n");
     printf("  -n, --count <number>      Number of elements [default: 1000]\n");
     printf("  -t, --type <datatype>     Data type (int, double, float, char) [default: int]\n");
     printf("  -r, --root <rank>         Root rank [default: 0]\n");
@@ -415,14 +763,19 @@ void print_usage(const char* program_name) {
     printf("\nAvailable algorithms:\n");
     printf("  Broadcast: small, large\n");
     printf("  Reduce: small, large\n");
+    printf("  Gather: any\n");
+    printf("  Scatter: any\n");
+    printf("  Alltoall: small\n");
+    printf("  Allgather: small\n");
     printf("\nExamples:\n");
     printf("  mpirun -np 4 %s -c bcast -a small -n 100 -t double -r 0 -v\n", program_name);
     printf("  mpirun -np 4 %s -c reduce -a large -n 1000 -t int -r 0 -v\n", program_name);
+    printf("  mpirun -np 4 %s -c gather -a any -n 50 -t float -r 0 -v\n", program_name);
+    printf("  mpirun -np 4 %s -c scatter -a any -n 25 -t int -r 0 -v\n", program_name);
+    printf("  mpirun -np 4 %s -c alltoall -a small -n 10 -t int -v\n", program_name);
+    printf("  mpirun -np 4 %s -c allgather -a small -n 20 -t double -v\n", program_name);
 }
 
-/**
- * @brief Parse command line arguments
- */
 int parse_args(int argc, char* argv[], test_config_t* config) {
     // Set defaults
     strcpy(config->collective, "bcast");
@@ -482,16 +835,32 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    // Run appropriate test based on collective type
     int result = 0;
+    collective_type_t type = get_collective_type(config.collective);
     
-    // Run the appropriate test
-    if (strcmp(config.collective, "bcast") == 0) {
-        result = test_bcast_correctness(&config);
-    } else if (strcmp(config.collective, "reduce") == 0) {
-        result = test_reduce_correctness(&config);
-    } else {
-        if (rank == 0) printf("Error: Unsupported collective '%s'\n", config.collective);
-        result = 1;
+    switch (type) {
+        case COLLECTIVE_BCAST:
+            result = test_bcast_correctness(&config);
+            break;
+        case COLLECTIVE_REDUCE:
+            result = test_reduce_correctness(&config);
+            break;
+        case COLLECTIVE_GATHER:
+            result = test_gather_correctness(&config);
+            break;
+        case COLLECTIVE_SCATTER:
+            result = test_scatter_correctness(&config);
+            break;
+        case COLLECTIVE_ALLTOALL:
+            result = test_alltoall_correctness(&config);
+            break;
+        case COLLECTIVE_ALLGATHER:
+            result = test_allgather_correctness(&config);
+            break;
+        default:
+            if (rank == 0) printf("Error: Unsupported collective '%s'\n", config.collective);
+            result = 1;
     }
     
     MPI_Finalize();

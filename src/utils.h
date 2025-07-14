@@ -96,59 +96,61 @@ static inline int in_range(int x, uint32_t nbits){
     return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
 }
 
-/**
- * @brief Gets the negabinary representation of a rank, by considering that if
- * num_ranks it is not a power of two, the rank could have two different representations.
- * In that case, the function will select the correct representation.
- * @param num_ranks The total number of ranks.
- * @param rank The rank to convert.
- * @returns The negabinary representation of the rank.
- */
-static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, uint32_t rank){
-    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
-    size_t num_bits = log_2(num_ranks);
-    if(rank % 2){
-        if(in_range(rank, num_bits)){
-            nba = binary_to_negabinary(rank);
-        }
-        if(in_range(rank - num_ranks, num_bits)){
-            nbb = binary_to_negabinary(rank - num_ranks);
-        }
-    }else{
-        if(in_range(-rank, num_bits)){
-            nba = binary_to_negabinary(-rank);
-        }
-        if(in_range(-rank + num_ranks, num_bits)){
-            nbb = binary_to_negabinary(-rank + num_ranks);
-        }
-    }
-
-    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
-
-    if(nba == UINT32_MAX && nbb != UINT32_MAX){
-        return nbb;
-    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
-        return nba;
-    }else{ // Check MSB
-        if(nba & (80000000 >> (32 - num_bits))){
-            return nba;
-        }else{
-            return nbb;
-        }
-    }
+static inline uint32_t nb_to_nu(uint32_t nb, uint32_t size){
+  return reverse(nb ^ (nb >> 1)) >> (32 - log_2(size));
 }
 
 /**
  * @brief Computes nu(r, p) (see the paper).
  * @param rank The rank to convert (denoted as 'r' in the paper).
- * @param num_ranks The total number of ranks (denoted as 'p' in the paper).
+ * @param size The total number of ranks (denoted as 'p' in the paper).
  * @returns The remapped rank.
  */
-static inline uint32_t nu(uint32_t rank, uint32_t num_ranks){
-    uint32_t nu = get_rank_negabinary_representation(num_ranks, rank);    
-    nu = nu ^ (nu >> 1);
-    size_t num_bits = log_2(num_ranks);
-    nu = reverse(nu) >> (32 - num_bits);
-    return nu;
+static inline uint32_t nu(uint32_t rank, uint32_t size){
+  uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+  size_t num_bits = log_2(size);
+  if(rank % 2){
+      if(in_range(rank, num_bits)){
+          nba = binary_to_negabinary(rank);
+      }
+      if(in_range(rank - size, num_bits)){
+          nbb = binary_to_negabinary(rank - size);
+      }
+  }else{
+      if(in_range(-rank, num_bits)){
+          nba = binary_to_negabinary(-rank);
+      }
+      if(in_range(-rank + size, num_bits)){
+          nbb = binary_to_negabinary(-rank + size);
+      }
+  }
+  assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+  if(nba == UINT32_MAX && nbb != UINT32_MAX){
+      return nb_to_nu(nbb, size);
+  }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+      return nb_to_nu(nba, size);
+  }else{ // Check MSB
+      int nu_a = nb_to_nu(nba, size);
+      int nu_b = nb_to_nu(nbb, size);
+      if(nu_a < nu_b){
+          return nu_a;
+      }else{
+          return nu_b;
+      }
+  }
 }
 
+static inline uint32_t mersenne(int n) {
+    return (1UL << (n + 1)) - 1;
+}
+
+static inline int remap_distance_doubling(uint32_t num) {
+    int remapped = 0;
+    while (num > 0) {
+        int k = 31 - __builtin_clz(num); // Find the position of the highest set bit
+        remapped ^= (0x1 << k); // Set the k-th bit in the remapped number
+        num ^= mersenne(k); // XOR the Mersenne number with the remaining number
+    }
+    return remapped;
+}

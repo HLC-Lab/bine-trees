@@ -4,9 +4,20 @@
 # Test configuration arrays
 VECTOR_SIZES=(16 100 1000 10000 100000)
 DATATYPES=("int" "double" "float" "char")
-RANK_COUNTS=(2 4 8 16)
-COLLECTIVES=("bcast" "reduce")
-ALGORITHMS=("small" "large")
+RANK_COUNTS=(2 8)
+COLLECTIVES=("bcast" "reduce" "gather" "scatter" "alltoall" "allgather")
+
+# Algorithm mappings for each collective
+declare -A COLLECTIVE_ALGORITHMS
+COLLECTIVE_ALGORITHMS["bcast"]="small large"
+COLLECTIVE_ALGORITHMS["reduce"]="small large"
+COLLECTIVE_ALGORITHMS["gather"]="any"
+COLLECTIVE_ALGORITHMS["scatter"]="any"
+COLLECTIVE_ALGORITHMS["alltoall"]="small"
+COLLECTIVE_ALGORITHMS["allgather"]="block_by_block"
+
+# Collectives that support multiple datatypes (reduce operations)
+REDUCE_COLLECTIVES=("reduce" "allreduce" "reduce_scatter")
 
 # Colors for output
 RED='\033[0;31m'
@@ -72,6 +83,26 @@ format_time() {
     fi
 }
 
+# Function to get algorithms for a specific collective
+get_algorithms_for_collective() {
+    local collective=$1
+    echo "${COLLECTIVE_ALGORITHMS[$collective]}"
+}
+
+# Function to get datatypes for a specific collective
+get_datatypes_for_collective() {
+    local collective=$1
+    # Check if this is a reduce-type collective
+    for reduce_collective in "${REDUCE_COLLECTIVES[@]}"; do
+        if [[ "$collective" == "$reduce_collective" ]]; then
+            echo "${DATATYPES[@]}"
+            return
+        fi
+    done
+    # For non-reduce collectives, only use int
+    echo "int"
+}
+
 # Function to run a single test
 run_test() {
     local ranks=$1
@@ -125,9 +156,11 @@ calculate_total_tests() {
     local total=0
     for ranks in "${RANK_COUNTS[@]}"; do
         for collective in "${COLLECTIVES[@]}"; do
-            for algorithm in "${ALGORITHMS[@]}"; do
+            local algorithms=($(get_algorithms_for_collective "$collective"))
+            local datatypes=($(get_datatypes_for_collective "$collective"))
+            for algorithm in "${algorithms[@]}"; do
                 for count in "${VECTOR_SIZES[@]}"; do
-                    for datatype in "${DATATYPES[@]}"; do
+                    for datatype in "${datatypes[@]}"; do
                         ((total++))
                     done
                 done
@@ -147,6 +180,15 @@ main() {
         exit 1
     fi
     
+    # Print collective-algorithm mappings
+    print_status "INFO" "Collective-Algorithm mappings:"
+    for collective in "${COLLECTIVES[@]}"; do
+        local algorithms=($(get_algorithms_for_collective "$collective"))
+        local datatypes=($(get_datatypes_for_collective "$collective"))
+        print_status "INFO" "  $collective: algorithms=${algorithms[*]}, datatypes=${datatypes[*]}"
+    done
+    echo
+    
     # Calculate total tests
     TOTAL_TESTS=$(calculate_total_tests)
     print_status "INFO" "Total tests to run: $TOTAL_TESTS"
@@ -159,11 +201,17 @@ main() {
         print_status "INFO" "Testing with $ranks ranks"
         
         for collective in "${COLLECTIVES[@]}"; do
-            for algorithm in "${ALGORITHMS[@]}"; do
-                print_status "TEST" "Algorithm: $algorithm"
+            print_status "TEST" "Collective: $collective"
+            
+            # Get algorithms and datatypes specific to this collective
+            local algorithms=($(get_algorithms_for_collective "$collective"))
+            local datatypes=($(get_datatypes_for_collective "$collective"))
+            
+            for algorithm in "${algorithms[@]}"; do
+                print_status "TEST" "  Algorithm: $algorithm"
                 
                 for count in "${VECTOR_SIZES[@]}"; do
-                    for datatype in "${DATATYPES[@]}"; do
+                    for datatype in "${datatypes[@]}"; do
                         ((current_test++))
                         print_progress $current_test $TOTAL_TESTS
                         

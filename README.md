@@ -5,7 +5,7 @@
 # Introduction
 This repository contains reference MPI implementations of the Bine Trees algorithms for collective operations.
 
-The Bine tree algorithm is described in the paper *"Bine Trees: Enhancing Collective Operations by Optimizing Communication Locality"* by Daniele De Sensi, Saverio Pasqualoni, Lorenzo Piarulli, Tommaso Bonato, Seydou Ba, Matteo Turisini, Jens Domke, Torsten Hoefler, to be presented at SC25.
+The Bine tree algorithm is described in the paper [*"Bine Trees: Enhancing Collective Operations by Optimizing Communication Locality"*](https://arxiv.org/abs/2508.17311) by Daniele De Sensi, Saverio Pasqualoni, Lorenzo Piarulli, Tommaso Bonato, Seydou Ba, Matteo Turisini, Jens Domke, Torsten Hoefler, to be presented at SC25.
 
 This repository is structured as follows:
 - `src/`: contains the source code for the Bine Trees algorithms.

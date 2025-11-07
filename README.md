@@ -1,6 +1,6 @@
 > [!IMPORTANT]  
 > This repository is still a work in progress. Some implementations are already provided, and others will be in the next few weeks.
-> In the meanwhile, you can refer to https://github.com/HLC-Lab/pico/tree/main/libbine
+> In the meanwhile, you can refer to https://github.com/HLC-Lab/pico/tree/main/libpico
 
 # Introduction
 This repository contains reference MPI implementations of the Bine Trees algorithms for collective operations.
